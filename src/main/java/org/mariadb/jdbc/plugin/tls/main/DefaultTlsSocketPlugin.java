@@ -6,9 +6,7 @@ package org.mariadb.jdbc.plugin.tls.main;
 import java.io.*;
 import java.net.URI;
 import java.security.GeneralSecurityException;
-import java.security.KeyManagementException;
 import java.security.KeyStore;
-import java.security.NoSuchAlgorithmException;
 import java.security.cert.Certificate;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
@@ -18,6 +16,7 @@ import java.util.UUID;
 import javax.net.ssl.*;
 import org.mariadb.jdbc.Configuration;
 import org.mariadb.jdbc.client.tls.HostnameVerifier;
+import org.mariadb.jdbc.client.tls.MariaDbX509EphemeralTrustingManager;
 import org.mariadb.jdbc.client.tls.MariaDbX509KeyManager;
 import org.mariadb.jdbc.client.tls.MariaDbX509TrustingManager;
 import org.mariadb.jdbc.export.ExceptionFactory;
@@ -90,11 +89,10 @@ public class DefaultTlsSocketPlugin implements TlsSocketPlugin {
   }
 
   @Override
-  public SSLSocketFactory getSocketFactory(Configuration conf, ExceptionFactory exceptionFactory)
+  public TrustManager[] getTrustManager(Configuration conf, ExceptionFactory exceptionFactory)
       throws SQLException {
 
     TrustManager[] trustManager = null;
-    KeyManager[] keyManager = null;
 
     if (conf.sslMode() == SslMode.TRUST) {
       trustManager = new X509TrustManager[] {new MariaDbX509TrustingManager()};
@@ -148,8 +146,34 @@ public class DefaultTlsSocketPlugin implements TlsSocketPlugin {
               "08000",
               generalSecurityEx);
         }
+      } else {
+        try {
+          TrustManagerFactory tmf =
+              TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+          tmf.init((KeyStore) null);
+
+          for (TrustManager tm : tmf.getTrustManagers()) {
+            if (tm instanceof X509TrustManager) {
+              trustManager =
+                  new X509TrustManager[] {
+                    new MariaDbX509EphemeralTrustingManager((X509TrustManager) tm)
+                  };
+              break;
+            }
+          }
+        } catch (Exception e) {
+          // eat
+        }
       }
     }
+    return trustManager;
+  }
+
+  @Override
+  public KeyManager[] getKeyManager(Configuration conf, ExceptionFactory exceptionFactory)
+      throws SQLException {
+
+    KeyManager[] keyManager = null;
 
     if (conf.keyStore() != null) {
       keyManager =
@@ -179,17 +203,7 @@ public class DefaultTlsSocketPlugin implements TlsSocketPlugin {
         }
       }
     }
-
-    try {
-      SSLContext sslContext = SSLContext.getInstance("TLS");
-      sslContext.init(keyManager, trustManager, null);
-      return sslContext.getSocketFactory();
-    } catch (KeyManagementException keyManagementEx) {
-      throw exceptionFactory.create("Could not initialize SSL context", "08000", keyManagementEx);
-    } catch (NoSuchAlgorithmException noSuchAlgorithmEx) {
-      throw exceptionFactory.create(
-          "SSLContext TLS Algorithm not unknown", "08000", noSuchAlgorithmEx);
-    }
+    return keyManager;
   }
 
   @Override
